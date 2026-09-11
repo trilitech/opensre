@@ -30,6 +30,11 @@ def _clear_env(monkeypatch) -> None:
         "AWS_EXTERNAL_ID",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
+        "KUBERNETES_INSTANCES",
+        "KUBECONFIG",
+        "KUBECONFIG_CONTENT",
+        "KUBECONFIG_CONTEXT",
+        "KUBECONFIG_NAMESPACE",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -176,6 +181,11 @@ def test_empty_json_array_falls_through_to_legacy(
             {"name": "prod", "role_arn": "arn:aws:iam::1:role/r", "external_id": "e"},
         ),
         (
+            "KUBERNETES_INSTANCES",
+            "kubernetes",
+            {"name": "prod", "kubeconfig_path": "/etc/opensre/kube/prod.kubeconfig"},
+        ),
+        (
             "NEW_RELIC_INSTANCES",
             "new_relic",
             {
@@ -187,7 +197,7 @@ def test_empty_json_array_falls_through_to_legacy(
         ),
     ],
 )
-def test_instances_env_var_for_all_5_providers(
+def test_instances_env_var_for_all_providers(
     monkeypatch: pytest.MonkeyPatch,
     env_name: str,
     service: str,
@@ -199,3 +209,23 @@ def test_instances_env_var_for_all_5_providers(
     service_records = [r for r in records if r.get("service") == service]
     assert len(service_records) == 1
     assert [i["name"] for i in service_records[0]["instances"]] == ["prod", "staging"]
+
+
+def test_kubernetes_instances_suppresses_legacy_kubeconfig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(
+        "KUBERNETES_INSTANCES",
+        json.dumps(
+            [
+                {"name": "gra", "kubeconfig_path": "/etc/opensre/kube/gra.kubeconfig"},
+                {"name": "rbx", "kubeconfig_path": "/etc/opensre/kube/rbx.kubeconfig"},
+            ]
+        ),
+    )
+    monkeypatch.setenv("KUBECONFIG", "/should/be/ignored.kubeconfig")
+    records = [r for r in load_env_integrations() if r.get("service") == "kubernetes"]
+    assert len(records) == 1
+    assert [i["name"] for i in records[0]["instances"]] == ["gra", "rbx"]
+    assert "kubeconfig_path" not in records[0]  # no flat legacy record leaked

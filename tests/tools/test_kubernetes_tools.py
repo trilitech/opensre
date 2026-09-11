@@ -195,7 +195,7 @@ def test_list_pods_run_happy_path(monkeypatch) -> None:  # type: ignore[no-untyp
 
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -226,7 +226,7 @@ def test_list_pods_run_returns_unavailable_on_api_error(monkeypatch) -> None:  #
     mock_client._networking_v1 = MagicMock()
 
     tool = KubernetesListPodsTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
     assert result["available"] is False
@@ -253,7 +253,7 @@ def test_get_pod_logs_run_happy_path(monkeypatch) -> None:  # type: ignore[no-un
     mock_client._networking_v1 = MagicMock()
 
     tool = KubernetesGetPodLogsTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(
             kubeconfig=_MINIMAL_KUBECONFIG,
             pod_name="web-abc",
@@ -307,7 +307,7 @@ def test_list_deployments_run_happy_path(monkeypatch) -> None:  # type: ignore[n
     mock_client._networking_v1 = MagicMock()
 
     tool = KubernetesListDeploymentsTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
     assert result["available"] is True
@@ -352,7 +352,7 @@ def test_get_events_run_happy_path(monkeypatch) -> None:  # type: ignore[no-unty
     mock_client._networking_v1 = MagicMock()
 
     tool = KubernetesGetEventsTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
     assert result["available"] is True
@@ -403,7 +403,7 @@ def test_describe_pod_run_happy_path() -> None:
     tool = KubernetesDescribePodTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, pod_name="web-abc", namespace="default")
 
@@ -437,7 +437,7 @@ def test_describe_pod_run_includes_valuefrom_env_names_without_values() -> None:
     tool = KubernetesDescribePodTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, pod_name="web-abc", namespace="default")
 
@@ -461,7 +461,7 @@ def test_describe_pod_run_strips_last_applied_config_annotation() -> None:
     tool = KubernetesDescribePodTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, pod_name="web-abc", namespace="default")
 
@@ -500,7 +500,7 @@ def test_list_nodes_run_happy_path() -> None:
     tool = KubernetesListNodesTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG)
 
@@ -553,7 +553,7 @@ def test_list_services_run_happy_path() -> None:
     tool = KubernetesListServicesTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -598,7 +598,7 @@ def test_list_statefulsets_run_happy_path() -> None:
     tool = KubernetesListStatefulSetsTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_apps(mock_apps),
+        return_value=(_make_client_with_apps(mock_apps), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -644,7 +644,7 @@ def test_list_daemonsets_run_happy_path() -> None:
     tool = KubernetesListDaemonSetsTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_apps(mock_apps),
+        return_value=(_make_client_with_apps(mock_apps), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -697,7 +697,7 @@ def test_list_ingresses_run_happy_path() -> None:
     tool = KubernetesListIngressesTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_networking(mock_networking),
+        return_value=(_make_client_with_networking(mock_networking), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -742,7 +742,7 @@ def test_list_configmaps_run_happy_path() -> None:
     tool = KubernetesListConfigMapsTool()
     with patch(
         "integrations.kubernetes.tools._make_client",
-        return_value=_make_client_with_core(mock_core),
+        return_value=(_make_client_with_core(mock_core), None),
     ):
         result = tool.run(kubeconfig=_MINIMAL_KUBECONFIG, namespace="default")
 
@@ -786,7 +786,7 @@ def test_get_resource_run_happy_path() -> None:
     }
 
     tool = KubernetesGetResourceTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(
             kubeconfig=_MINIMAL_KUBECONFIG,
             resource_type="deployment",
@@ -827,7 +827,7 @@ def test_get_resource_run_strips_last_applied_config_annotation() -> None:
     }
 
     tool = KubernetesGetResourceTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(
             kubeconfig=_MINIMAL_KUBECONFIG,
             resource_type="deployment",
@@ -851,7 +851,7 @@ def test_get_resource_run_unsupported_type() -> None:
     mock_client._networking_v1 = MagicMock()
 
     tool = KubernetesGetResourceTool()
-    with patch("integrations.kubernetes.tools._make_client", return_value=mock_client):
+    with patch("integrations.kubernetes.tools._make_client", return_value=(mock_client, None)):
         result = tool.run(
             kubeconfig=_MINIMAL_KUBECONFIG, resource_type="foobar", name="x", namespace="default"
         )
@@ -864,3 +864,144 @@ def test_get_resource_run_returns_unavailable_when_no_client() -> None:
     tool = KubernetesGetResourceTool()
     result = tool.run(kubeconfig="", resource_type="deployment", name="api")
     assert result["available"] is False
+
+
+# ---------------------------------------------------------------------------
+# Multi-cluster (KUBERNETES_INSTANCES) resolution
+# ---------------------------------------------------------------------------
+
+_MULTI_INSTANCES = [
+    {"name": "gra", "config": {"kubeconfig": _MINIMAL_KUBECONFIG, "context": "gra-ctx"}},
+    {"name": "rbx", "config": {"kubeconfig": _MINIMAL_KUBECONFIG, "context": "rbx-ctx"}},
+]
+
+
+class TestMultiClusterResolution:
+    def test_multi_instance_without_cluster_is_a_hard_error_listing_names(self) -> None:
+        result = KubernetesListPodsTool().run(_instances=_MULTI_INSTANCES)
+        assert result["available"] is False
+        assert "gra" in result["error"] and "rbx" in result["error"]
+        assert result["pods"] == []
+
+    def test_unknown_cluster_errors_listing_valid_names(self) -> None:
+        result = KubernetesListPodsTool().run(cluster="nope", _instances=_MULTI_INSTANCES)
+        assert result["available"] is False
+        assert "nope" in result["error"]
+        assert "gra" in result["error"] and "rbx" in result["error"]
+
+    def test_valid_cluster_builds_client_from_that_instance(self) -> None:
+        with patch("integrations.kubernetes.tools.KubernetesClient") as client_cls:
+            client = client_cls.return_value
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=False)
+            client.list_pods.return_value = {"success": True, "pods": [], "total": 0}
+            result = KubernetesListPodsTool().run(cluster="RBX", _instances=_MULTI_INSTANCES)
+        assert result["available"] is True
+        cfg = client_cls.call_args.args[0]
+        assert cfg.context == "rbx-ctx"  # rbx instance, case-insensitive match
+
+    def test_single_instance_needs_no_cluster_param(self) -> None:
+        with patch("integrations.kubernetes.tools.KubernetesClient") as client_cls:
+            client = client_cls.return_value
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=False)
+            client.list_pods.return_value = {"success": True, "pods": [], "total": 0}
+            result = KubernetesListPodsTool().run(_instances=_MULTI_INSTANCES[:1])
+        assert result["available"] is True
+        assert client_cls.call_args.args[0].context == "gra-ctx"
+
+    def test_no_instances_keeps_legacy_single_kubeconfig_path(self) -> None:
+        with patch("integrations.kubernetes.tools.KubernetesClient") as client_cls:
+            client = client_cls.return_value
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=False)
+            client.list_pods.return_value = {"success": True, "pods": [], "total": 0}
+            result = KubernetesListPodsTool().run(kubeconfig=_MINIMAL_KUBECONFIG)
+        assert result["available"] is True
+
+    def test_extract_params_carries_instances_from_sources(self) -> None:
+        params = KubernetesListPodsTool().extract_params(
+            {
+                "kubernetes": {"kubeconfig": _MINIMAL_KUBECONFIG},
+                "_all_kubernetes_instances": _MULTI_INSTANCES,
+            }
+        )
+        assert params["_instances"] == _MULTI_INSTANCES
+        assert params["cluster"] == ""
+
+    def test_cluster_is_model_visible_and_instances_injected(self) -> None:
+        for tool in (
+            KubernetesListPodsTool(),
+            KubernetesGetPodLogsTool(),
+            KubernetesListNodesTool(),
+        ):
+            assert "_instances" in tool.injected_params
+            assert "cluster" not in tool.injected_params
+            assert "cluster" in tool.input_schema["properties"]
+            # namespace must be model-visible so the agent can target the alert's
+            # namespace; if injected it silently pins to 'default' and misses the workload
+            if "namespace" in tool.input_schema["properties"]:
+                assert "namespace" not in tool.injected_params
+
+
+class TestProductionClassifyPath:
+    """Regression for the Stage-3 antagonist critical finding: instance configs
+    arrive as Pydantic models via classify_integrations, not dicts — resolution
+    must work through the REAL env → classify → availability_view path."""
+
+    def _sources_from_env(self, monkeypatch, entries) -> dict[str, Any]:
+        import json as _json
+
+        from core.tool import availability_view
+        from integrations.catalog import classify_integrations, load_env_integrations
+
+        for key in ("KUBECONFIG", "KUBECONFIG_CONTENT", "KUBECONFIG_CONTEXT"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("KUBERNETES_INSTANCES", _json.dumps(entries))
+        return availability_view(classify_integrations(load_env_integrations()))
+
+    def test_multi_instance_resolves_through_real_path(self, monkeypatch, tmp_path) -> None:
+        paths = {}
+        for name in ("gra", "rbx"):
+            p = tmp_path / f"{name}.kubeconfig"
+            p.write_text(_MINIMAL_KUBECONFIG)
+            paths[name] = str(p)
+        sources = self._sources_from_env(
+            monkeypatch,
+            [
+                {"name": "gra", "kubeconfig_path": paths["gra"], "context": "gra-ctx"},
+                {"name": "rbx", "kubeconfig_path": paths["rbx"], "context": "rbx-ctx"},
+            ],
+        )
+        assert "_all_kubernetes_instances" in sources
+        tool = KubernetesListPodsTool()
+        params = tool.extract_params(sources)
+
+        missing = tool.run(**params)
+        assert missing["available"] is False and "pass 'cluster'" in missing["error"]
+
+        with patch("integrations.kubernetes.tools.KubernetesClient") as client_cls:
+            client = client_cls.return_value
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=False)
+            client.list_pods.return_value = {"success": True, "pods": [], "total": 0}
+            ok = tool.run(**{**params, "cluster": "rbx"})
+        assert ok["available"] is True, ok.get("error")
+        assert client_cls.call_args.args[0].context == "rbx-ctx"
+        assert client_cls.call_args.args[0].kubeconfig_path == paths["rbx"]
+
+    def test_single_named_instance_resolves_through_real_path(self, monkeypatch, tmp_path) -> None:
+        p = tmp_path / "solo.kubeconfig"
+        p.write_text(_MINIMAL_KUBECONFIG)
+        sources = self._sources_from_env(
+            monkeypatch, [{"name": "solo", "kubeconfig_path": str(p), "context": "solo-ctx"}]
+        )
+        tool = KubernetesListPodsTool()
+        with patch("integrations.kubernetes.tools.KubernetesClient") as client_cls:
+            client = client_cls.return_value
+            client.__enter__ = MagicMock(return_value=client)
+            client.__exit__ = MagicMock(return_value=False)
+            client.list_pods.return_value = {"success": True, "pods": [], "total": 0}
+            ok = tool.run(**tool.extract_params(sources))
+        assert ok["available"] is True, ok.get("error")
+        assert client_cls.call_args.args[0].context == "solo-ctx"

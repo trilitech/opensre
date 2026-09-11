@@ -29,4 +29,7 @@ def classify(
         return None, None
     if cfg.is_configured:
         return cfg, "kubernetes"
+    logger.warning(
+        "kubernetes record %s has neither kubeconfig nor kubeconfig_path — skipped", record_id
+    )
     return None, None
