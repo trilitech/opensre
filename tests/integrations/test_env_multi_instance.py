@@ -186,6 +186,11 @@ def test_empty_json_array_falls_through_to_legacy(
             {"name": "prod", "kubeconfig_path": "/etc/opensre/kube/prod.kubeconfig"},
         ),
         (
+            "GCP_LOGGING_INSTANCES",
+            "gcp_logging",
+            {"name": "prod", "project_id": "prod"},
+        ),
+        (
             "NEW_RELIC_INSTANCES",
             "new_relic",
             {

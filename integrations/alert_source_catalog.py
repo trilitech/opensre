@@ -127,6 +127,7 @@ _ALIASES_TABLE: dict[str, tuple[str, ...]] = {
     "tempo": ("tempo",),
     "temporal": ("temporal", "temporal workflow", "task queue"),
     "new_relic": ("new relic", "newrelic", "nrql", "nr alert"),
+    "gcp_logging": ("gcp", "cloud run", "cloud_run_revision", "gce_instance", "stackdriver"),
 }
 
 
