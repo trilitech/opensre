@@ -188,6 +188,7 @@
                   "elb",
                   "helm",
                   "kubernetes",
+                  "gcp_logging",
                   "yandex-cloud",
                   "railway",
                   "s3",

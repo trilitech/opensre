@@ -215,6 +215,32 @@ class VercelIntegrationConfig(StrictConfigModel):
         return {"teamId": self.team_id} if self.team_id else {}
 
 
+class GcpLoggingIntegrationConfig(StrictConfigModel):
+    """Normalized GCP Cloud Logging credentials for read-only log reads.
+
+    Each instance is keyed by its GCP ``project_id`` (the instance ``name`` is
+    the project id). Authentication is credential-mechanism-agnostic: when
+    ``credentials_path`` is empty the client uses Application Default
+    Credentials (``google.auth.default``); when set it loads that service
+    account key file. ``default_filter`` is an optional advanced-filter
+    fragment applied to every ``entries.list`` query for this project.
+    """
+
+    project_id: str
+    credentials_path: str = ""
+    default_filter: str = ""
+    integration_id: str = ""
+
+    _normalize_project_id = field_validator("project_id", mode="before")(normalize_str())
+    _normalize_strs = field_validator(
+        "credentials_path", "default_filter", "integration_id", mode="before"
+    )(normalize_str())
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.project_id)
+
+
 # ---------------------------------------------------------------------------
 # Alerting & Incident Management
 # ---------------------------------------------------------------------------

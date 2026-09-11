@@ -442,6 +442,14 @@ _BUILTIN_SPECS: tuple[IntegrationSpec, ...] = (
         verify_order=53,
     ),
     IntegrationSpec(
+        service="gcp_logging",
+        has_verifier=True,
+        direct_effective=True,
+        core_verify=True,
+        setup_order=52,
+        verify_order=57,
+    ),
+    IntegrationSpec(
         service="new_relic",
         aliases=("newrelic", "new relic"),
         has_verifier=True,

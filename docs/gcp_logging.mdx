@@ -1,0 +1,97 @@
+---
+title: "GCP Cloud Logging"
+description: "Read Cloud Run and Compute Engine logs from one or more GCP projects via Cloud Logging so OpenSRE can investigate errors, crashes, and request failures"
+---
+
+OpenSRE reads logs from Google Cloud Logging using the REST `entries.list` API. It is strictly **read-only** — it never calls a write or admin Logging method — and works across multiple GCP projects. Use it to pull recent application logs for a **Cloud Run** service or a **Compute Engine** VM named in an alert.
+
+## Prerequisites
+
+- One or more GCP project ids whose logs you want to read
+- Credentials with the read-only `roles/logging.viewer` role (or equivalent), resolved via Application Default Credentials (ADC)
+
+## Setup
+
+### Environment variables
+
+`GCP_LOGGING_INSTANCES` is a JSON array of projects. Each instance's `name` **is** its `project_id` — there is no separate key.
+
+```bash
+# One project
+GCP_LOGGING_INSTANCES='[{"name":"my-project-id","project_id":"my-project-id"}]'
+
+# Multiple projects
+GCP_LOGGING_INSTANCES='[
+  {"name":"checkout-prod","project_id":"checkout-prod"},
+  {"name":"payments-prod","project_id":"payments-prod","default_filter":"resource.labels.location=\"us-central1\""}
+]'
+```
+
+Authentication is via ADC. Point `GOOGLE_APPLICATION_CREDENTIALS` at a read-only `logging.viewer` service-account key file, or leave it unset to use ambient credentials (attached service account, `gcloud` user credentials, etc.):
+
+```bash
+# Read-only logging.viewer service-account key file
+GOOGLE_APPLICATION_CREDENTIALS=/etc/opensre/gcp/logging-viewer.json
+```
+
+The integration requests the `https://www.googleapis.com/auth/logging.read` scope explicitly — unscoped service-account credentials will be rejected with a 403 by the Logging API.
+
+### Verify connectivity
+
+```bash
+opensre integrations verify gcp_logging
+```
+
+A successful verification performs a tiny live `entries.list` against the configured project(s). Unconfigured, it reports as `missing` rather than failing.
+
+## Available tools
+
+| Tool | What it does |
+|---|---|
+| `gcp_logging_query` | Read recent Cloud Logging entries for a Cloud Run service or Compute Engine VM in a GCP project (read-only, `entries.list` only) |
+
+### `gcp_logging_query` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `project` | string | `""` | GCP project id to query — use the project named in the alert. Required when multiple projects are configured; optional for a single-project setup. |
+| `resource_type` | enum | `cloud_run_revision` | Monitored-resource type: `cloud_run_revision` or `gce_instance`. |
+| `resource_name` | string | `""` | Cloud Run service name (for `cloud_run_revision`) or instance id (for `gce_instance`). Omit to query all resources of the type. |
+| `since_minutes` | integer | `60` | How far back to look, in minutes (timestamp floor). |
+| `severity` | enum | `WARNING` | Minimum severity to include (`severity>=` floor): `DEFAULT`, `DEBUG`, `INFO`, `NOTICE`, `WARNING`, `ERROR`, `CRITICAL`. |
+| `filter` | string | `""` | Optional extra Cloud Logging advanced-filter clause, AND-joined with the built-in filter. |
+| `limit` | integer | `50` | Maximum number of log entries to return (most recent first). |
+
+### Multi-project behavior: no silent default
+
+When more than one project is configured, `gcp_logging_query` will **not** guess. Calling it without a `project` (or with an unknown one) returns an error that lists the configured project ids rather than querying an arbitrary project — reading the wrong project's logs would poison a diagnosis. A single configured project resolves without needing `project`.
+
+## Configuration reference
+
+| Field | Where it is set | Default | Description |
+|---|---|---|---|
+| `GCP_LOGGING_INSTANCES` | environment variable | — | JSON array of projects; each `name` == `project_id` |
+| `credentials_path` | per-instance JSON field | `""` | Path to a read-only `logging.viewer` service-account key file, loaded via `from_service_account_file` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | environment variable | — | ADC key path, used **only when** `credentials_path` is empty |
+| `default_filter` | per-instance JSON field | `""` | Optional advanced-filter clause AND-joined onto every query for that project |
+
+The two auth paths are distinct: set a per-instance `credentials_path` to pin a specific key file per project, or leave it empty to fall back to ambient Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, attached service account, or `gcloud` user credentials).
+
+## Example: investigating Cloud Run errors
+
+```
+> Why is the checkout service on GCP returning 5xx errors?
+```
+
+OpenSRE will:
+1. Call `gcp_logging_query` with `project=checkout-prod`, `resource_type=cloud_run_revision`, `resource_name=checkout`, and a `severity=ERROR` floor
+2. Read the returned log entries (most recent first) for stack traces and error messages
+3. Correlate the evidence into a root-cause summary
+
+## Permissions
+
+The credentials need read-only Logging access on each configured project:
+
+- `roles/logging.viewer` (or the granular `logging.logEntries.list` permission)
+
+No write or admin Logging permissions are required or ever used.

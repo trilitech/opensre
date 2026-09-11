@@ -297,6 +297,7 @@ from integrations.dagster import classify as _classify_dagster
 from integrations.datadog import classify as _classify_datadog
 from integrations.discord import classify as _classify_discord
 from integrations.effective_models import EffectiveIntegrations
+from integrations.gcp_logging import classify as _classify_gcp_logging
 from integrations.github.mcp import build_github_mcp_config
 from integrations.github.mcp import classify as _classify_github
 from integrations.gitlab import DEFAULT_GITLAB_BASE_URL, build_gitlab_config
@@ -531,6 +532,7 @@ _CLASSIFIERS: dict[str, _ClassifyFn] = {
     "azure_sql": _classify_azure_sql,
     "alertmanager": _classify_alertmanager,
     "kubernetes": _classify_kubernetes,
+    "gcp_logging": _classify_gcp_logging,
     "argocd": _classify_argocd,
     "helm": _classify_helm,
     "victoria_logs": _classify_victoria_logs,
@@ -1797,6 +1799,10 @@ def load_env_integrations() -> list[dict[str, Any]]:
     kubernetes_multi = _parse_instances_env("KUBERNETES_INSTANCES", "kubernetes")
     if kubernetes_multi is not None:
         integrations.append(kubernetes_multi)
+
+    gcp_logging_multi = _parse_instances_env("GCP_LOGGING_INSTANCES", "gcp_logging")
+    if gcp_logging_multi is not None:
+        integrations.append(gcp_logging_multi)
 
     _kubeconfig_path = os.getenv(KUBECONFIG_PATH_ENV, "").strip()
     _kubeconfig_content = resolve_env_credential(KUBECONFIG_CONTENT_ENV)
