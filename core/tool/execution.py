@@ -445,10 +445,14 @@ def _invoke_runtime_tool(
         return tool.execute(tc.input, context)
 
     injected = tool.extract_params(tool_sources)
-    kwargs = {**injected, **tc.input}
     # Vendor-agnostic: each tool declares which extract_params keys must win
     # over model input (secrets / connection fields). See ``injected_params``.
     protected = frozenset(getattr(tool, "injected_params", ()) or ())
+    # injected params are pruned from the model-facing schema; a model value for
+    # one is hallucinated/adversarial. Drop it so an unset injected param fails
+    # closed (model cannot supply scope/creds — e.g. gcp_logging ``_instances``).
+    model_input = {k: v for k, v in tc.input.items() if k not in protected}
+    kwargs = {**injected, **model_input}
     for key, value in injected.items():
         if key in protected and value not in (None, "", []):
             kwargs[key] = value
