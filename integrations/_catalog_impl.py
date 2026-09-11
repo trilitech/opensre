@@ -1794,9 +1794,13 @@ def load_env_integrations() -> list[dict[str, Any]]:
         except Exception as exc:
             _report_env_loader_failure(exc, integration="alertmanager")
 
+    kubernetes_multi = _parse_instances_env("KUBERNETES_INSTANCES", "kubernetes")
+    if kubernetes_multi is not None:
+        integrations.append(kubernetes_multi)
+
     _kubeconfig_path = os.getenv(KUBECONFIG_PATH_ENV, "").strip()
     _kubeconfig_content = resolve_env_credential(KUBECONFIG_CONTENT_ENV)
-    if _kubeconfig_path or _kubeconfig_content:
+    if kubernetes_multi is None and (_kubeconfig_path or _kubeconfig_content):
         try:
             kubernetes_config = KubernetesIntegrationConfig.model_validate(
                 {

@@ -9,28 +9,56 @@ from core.tool import BaseTool
 from core.tool_framework.utils import tool_unavailable
 from integrations.config_models import KubernetesIntegrationConfig
 from integrations.kubernetes.client import _RESOURCE_DISPATCH, KubernetesClient
+from integrations.selectors import get_instance_by_name, get_instances
 
 _RESOURCE_TYPE_ENUM: list[str] = sorted(_RESOURCE_DISPATCH.keys())
+_INSTANCES_KEY = "_all_kubernetes_instances"
 
 
-def _make_client(sources: dict[str, Any]) -> KubernetesClient | None:
+def _make_client(sources: dict[str, Any]) -> tuple[KubernetesClient | None, str | None]:
+    """Build a client, resolving multi-instance cluster selection.
+
+    Returns ``(client, error)``. With multiple configured instances and no (or
+    an unknown) ``cluster``, returns an error naming the valid clusters —
+    never silently defaults: wrong-cluster evidence poisons a diagnosis.
+    Instance entries are read via ``integrations.selectors`` (the public
+    multi-instance API), which normalizes dict and Pydantic-model configs.
+    """
     k8s = sources.get("kubernetes", {})
     kubeconfig = k8s.get("kubeconfig", "")
     kubeconfig_path = k8s.get("kubeconfig_path", "")
+    context = k8s.get("context", "")
+    cluster = str(k8s.get("cluster", "") or "").strip()
+    instances_view = {_INSTANCES_KEY: k8s.get("_instances") or []}
+    entries = get_instances(instances_view, "kubernetes")
+    if entries:
+        names = ", ".join(str(e.get("name", "?")) for e in entries)
+        if cluster:
+            conn = get_instance_by_name(instances_view, "kubernetes", cluster)
+            if conn is None:
+                return None, f"unknown cluster '{cluster}' — configured clusters: {names}"
+        elif len(entries) == 1:
+            conn = get_instance_by_name(instances_view, "kubernetes", str(entries[0]["name"]))
+        else:
+            return None, f"multiple clusters configured — pass 'cluster' as one of: {names}"
+        conn = conn or {}
+        kubeconfig = conn.get("kubeconfig", "")
+        kubeconfig_path = conn.get("kubeconfig_path", "")
+        context = conn.get("context", "")
     if not kubeconfig and not kubeconfig_path:
-        return None
+        return None, None
     try:
         cfg = KubernetesIntegrationConfig.model_validate(
             {
                 "kubeconfig": kubeconfig,
                 "kubeconfig_path": kubeconfig_path,
-                "context": k8s.get("context", ""),
+                "context": context,
                 "namespace": k8s.get("namespace", "default"),
             }
         )
-        return KubernetesClient(cfg)
+        return KubernetesClient(cfg), None
     except Exception:
-        return None
+        return None, None
 
 
 def _is_available(sources: dict[str, Any]) -> bool:
@@ -38,9 +66,11 @@ def _is_available(sources: dict[str, Any]) -> bool:
     return bool(k8s.get("kubeconfig") or k8s.get("kubeconfig_path"))
 
 
-def _missing_client_error(extra: dict[str, Any]) -> dict[str, Any]:
+def _missing_client_error(err: str | None, extra: dict[str, Any]) -> dict[str, Any]:
     return tool_unavailable(
-        "kubernetes", "Kubernetes integration is not configured (missing kubeconfig).", **extra
+        "kubernetes",
+        err or "Kubernetes integration is not configured (missing kubeconfig).",
+        **extra,
     )
 
 
@@ -55,7 +85,27 @@ _SHARED_KUBECONFIG_PROPS: dict[str, Any] = {
     "namespace": {
         "type": "string",
         "default": "default",
-        "description": "Kubernetes namespace to target",
+        "description": (
+            "Kubernetes namespace to target. Set this to the namespace named in the "
+            "alert (e.g. the alert's `namespace` label) — it does NOT default to the "
+            "alerting namespace, so a wrong/omitted value looks in 'default' and misses "
+            "the affected workload."
+        ),
+    },
+    "cluster": {
+        "type": "string",
+        "default": "",
+        "description": (
+            "Name of the target cluster when multiple Kubernetes clusters are "
+            "configured (required in that case — the error message lists valid "
+            "names). Use the cluster named in the alert (e.g. its `cluster` label). "
+            "Omit only for single-cluster setups."
+        ),
+    },
+    "_instances": {
+        "type": "array",
+        "default": [],
+        "description": "Injected: configured kubernetes instances (not model-visible)",
     },
 }
 
@@ -77,7 +127,7 @@ class KubernetesListPodsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = ["kubeconfig"]
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -109,6 +159,8 @@ class KubernetesListPodsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "label_selector": "",
             "limit": 50,
@@ -119,23 +171,27 @@ class KubernetesListPodsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         label_selector: str = "",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"pods": [], "total": 0})
+            return _missing_client_error(err, {"pods": [], "total": 0})
         with client:
             result = client.list_pods(
                 namespace=namespace, label_selector=label_selector, limit=limit
@@ -177,7 +233,7 @@ class KubernetesGetPodLogsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = ["pod_name"]
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -213,6 +269,8 @@ class KubernetesGetPodLogsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "pod_name": k8s.get("pod_name", ""),
             "container": k8s.get("container", ""),
@@ -225,6 +283,8 @@ class KubernetesGetPodLogsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         container: str = "",
         tail_lines: int = 100,
@@ -237,18 +297,20 @@ class KubernetesGetPodLogsTool(BaseTool):
                 lines=[],
                 total=0,
             )
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"lines": [], "total": 0})
+            return _missing_client_error(err, {"lines": [], "total": 0})
         with client:
             result = client.get_pod_logs(
                 namespace=namespace, pod_name=pod_name, container=container, tail_lines=tail_lines
@@ -287,7 +349,7 @@ class KubernetesListDeploymentsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -314,6 +376,8 @@ class KubernetesListDeploymentsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "limit": 50,
         }
@@ -323,22 +387,26 @@ class KubernetesListDeploymentsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"deployments": [], "total": 0})
+            return _missing_client_error(err, {"deployments": [], "total": 0})
         with client:
             result = client.list_deployments(namespace=namespace, limit=limit)
             if not result.get("success"):
@@ -375,7 +443,7 @@ class KubernetesGetEventsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -410,6 +478,8 @@ class KubernetesGetEventsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "field_selector": "",
             "limit": 50,
@@ -420,23 +490,27 @@ class KubernetesGetEventsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         field_selector: str = "",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"events": [], "total": 0})
+            return _missing_client_error(err, {"events": [], "total": 0})
         with client:
             result = client.get_events(
                 namespace=namespace, field_selector=field_selector, limit=limit
@@ -485,7 +559,7 @@ class KubernetesDescribePodTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = ["pod_name"]
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -508,6 +582,8 @@ class KubernetesDescribePodTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "pod_name": k8s.get("pod_name", ""),
         }
@@ -518,21 +594,25 @@ class KubernetesDescribePodTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"spec": {}, "status": {}})
+            return _missing_client_error(err, {"spec": {}, "status": {}})
         with client:
             result = client.describe_pod(namespace=namespace, pod_name=pod_name)
             if not result.get("success"):
@@ -567,7 +647,7 @@ class KubernetesListNodesTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -582,6 +662,8 @@ class KubernetesListNodesTool(BaseTool):
                 "default": "",
                 "description": "Kubeconfig context to use",
             },
+            "cluster": _SHARED_KUBECONFIG_PROPS["cluster"],
+            "_instances": _SHARED_KUBECONFIG_PROPS["_instances"],
             "limit": {
                 "type": "integer",
                 "default": 50,
@@ -604,6 +686,8 @@ class KubernetesListNodesTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "limit": 50,
         }
 
@@ -612,21 +696,25 @@ class KubernetesListNodesTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": "default",
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"nodes": [], "total": 0})
+            return _missing_client_error(err, {"nodes": [], "total": 0})
         with client:
             result = client.list_nodes(limit=limit)
             if not result.get("success"):
@@ -662,7 +750,7 @@ class KubernetesListServicesTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -694,6 +782,8 @@ class KubernetesListServicesTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "label_selector": "",
             "limit": 50,
@@ -704,23 +794,27 @@ class KubernetesListServicesTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         label_selector: str = "",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"services": [], "total": 0})
+            return _missing_client_error(err, {"services": [], "total": 0})
         with client:
             result = client.list_services(
                 namespace=namespace, label_selector=label_selector, limit=limit
@@ -757,7 +851,7 @@ class KubernetesListStatefulSetsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -784,6 +878,8 @@ class KubernetesListStatefulSetsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "limit": 50,
         }
@@ -793,22 +889,26 @@ class KubernetesListStatefulSetsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"statefulsets": [], "total": 0})
+            return _missing_client_error(err, {"statefulsets": [], "total": 0})
         with client:
             result = client.list_statefulsets(namespace=namespace, limit=limit)
             if not result.get("success"):
@@ -844,7 +944,7 @@ class KubernetesListDaemonSetsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -871,6 +971,8 @@ class KubernetesListDaemonSetsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "limit": 50,
         }
@@ -880,22 +982,26 @@ class KubernetesListDaemonSetsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"daemonsets": [], "total": 0})
+            return _missing_client_error(err, {"daemonsets": [], "total": 0})
         with client:
             result = client.list_daemonsets(namespace=namespace, limit=limit)
             if not result.get("success"):
@@ -932,7 +1038,7 @@ class KubernetesListIngressesTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -959,6 +1065,8 @@ class KubernetesListIngressesTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "limit": 50,
         }
@@ -968,22 +1076,26 @@ class KubernetesListIngressesTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"ingresses": [], "total": 0})
+            return _missing_client_error(err, {"ingresses": [], "total": 0})
         with client:
             result = client.list_ingresses(namespace=namespace, limit=limit)
             if not result.get("success"):
@@ -1019,7 +1131,7 @@ class KubernetesListConfigMapsTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = []
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -1046,6 +1158,8 @@ class KubernetesListConfigMapsTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "limit": 50,
         }
@@ -1055,22 +1169,26 @@ class KubernetesListConfigMapsTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         limit: int = 50,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
-            return _missing_client_error({"configmaps": [], "total": 0})
+            return _missing_client_error(err, {"configmaps": [], "total": 0})
         with client:
             result = client.list_configmaps(namespace=namespace, limit=limit)
             if not result.get("success"):
@@ -1120,7 +1238,7 @@ class KubernetesGetResourceTool(BaseTool):
     ]
     surfaces = (ToolSurface.CHAT,)
     requires = ["resource_type", "name"]
-    injected_params = ["kubeconfig", "kubeconfig_path", "context", "namespace"]
+    injected_params = ["kubeconfig", "kubeconfig_path", "context", "_instances"]
     input_schema = {
         "type": "object",
         "properties": {
@@ -1152,6 +1270,8 @@ class KubernetesGetResourceTool(BaseTool):
             "kubeconfig": k8s.get("kubeconfig", ""),
             "kubeconfig_path": k8s.get("kubeconfig_path", ""),
             "context": k8s.get("context", ""),
+            "cluster": "",
+            "_instances": sources.get("_all_kubernetes_instances", []),
             "namespace": k8s.get("namespace", "default"),
             "resource_type": k8s.get("resource_type", ""),
             "name": k8s.get("name", ""),
@@ -1164,22 +1284,26 @@ class KubernetesGetResourceTool(BaseTool):
         kubeconfig: str = "",
         kubeconfig_path: str = "",
         context: str = "",
+        cluster: str = "",
+        _instances: list[dict[str, Any]] | None = None,
         namespace: str = "default",
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        client = _make_client(
+        client, err = _make_client(
             {
                 "kubernetes": {
                     "kubeconfig": kubeconfig,
                     "kubeconfig_path": kubeconfig_path,
                     "context": context,
                     "namespace": namespace,
+                    "cluster": cluster,
+                    "_instances": _instances,
                 }
             }
         )
         if client is None:
             return _missing_client_error(
-                {"resource": {}, "resource_type": resource_type, "name": name}
+                err, {"resource": {}, "resource_type": resource_type, "name": name}
             )
         with client:
             result = client.get_resource(
